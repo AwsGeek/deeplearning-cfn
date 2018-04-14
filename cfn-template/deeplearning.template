@@ -6,6 +6,18 @@
       "Description" : "Name of an existing Amazon EC2 KeyPair to enable SSH access to the instances",
       "Type" : "AWS::EC2::KeyPair::KeyName"
     },
+    "VpcId" : {
+        "Description" : "(Optional) ID of an existing Amazon VPC. If not provided a new VPC, Subnets, & NAT Gateway will be created",
+        "Type" : "AWS::EC2::VPC::Id"
+    },
+    "PublicSubnetId" : {
+        "Description" : "(Required if VpcId is provided) ID of an existing subnet. This subnet must have a route to the Internet",
+        "Type" : "AWS::EC2::Subnet::Id"
+    },
+    "PrivateSubnetId" : {
+        "Description" : "(Required if VpcId is provided) ID of an existing subnet. This subnet must have a route to the Internet",
+        "Type" : "AWS::EC2::Subnet::Id"
+    },    
     "WorkerCount" : {
       "Description" : "The number of worker instances (launches +1 instance for the Master).",
       "Type" : "Number",
@@ -106,7 +118,8 @@
     }
   },
   "Conditions" : {
-    "CreateNewFileSystem" : { "Fn::Equals" : [{"Ref": "EFSFileSystemId"}, ""] }
+    "CreateNewFileSystem" : { "Fn::Equals" : [{"Ref": "EFSFileSystemId"}, ""] },
+    "CreateNewVpc" : { "Fn::Equals" : [{"Ref": "VpcId"}, ""] }
   },
   "Mappings" : {
     "AmazonLinux" : {
@@ -308,7 +321,7 @@
       "Type" : "AWS::EC2::SecurityGroup",
       "Properties" : {
         "GroupDescription" : "Security group that controls SSH access to the Master instance.",
-        "VpcId" : { "Ref" : "Vpc" },
+        "VpcId" : { "Fn::If" : [ "CreateNewVpc", {"Ref" : "Vpc"}, {"Ref" : "VpcId"} ] },
           "Tags" : [
             { "Key" : "Name", "Value" : {"Fn::Join" : ["", [{ "Ref" : "AWS::StackName" }, "_SSH" ] ] } }
           ],
@@ -323,7 +336,7 @@
       "Type" : "AWS::EC2::SecurityGroup",
       "Properties" : {
         "GroupDescription" : "Enable Port access to and from the Master on the Private Interface.",
-        "VpcId" : { "Ref" : "Vpc" },
+        "VpcId" : { "Fn::If" : [ "CreateNewVpc", {"Ref" : "Vpc"}, {"Ref" : "VpcId"} ] },
           "Tags" : [
             { "Key" : "Name", "Value" : {"Fn::Join" : ["", [{ "Ref" : "AWS::StackName" }, "_Master" ] ] } }
           ],
@@ -382,7 +395,7 @@
       "DependsOn" : ["MasterSecurityGroup"],
       "Properties" : {
         "GroupDescription" : "Enable Port access to and from the Worker on the Private Interface",
-        "VpcId" : { "Ref" : "Vpc" },
+        "VpcId" : { "Fn::If" : [ "CreateNewVpc", {"Ref" : "Vpc"}, {"Ref" : "VpcId"} ] },
           "Tags" : [
             { "Key" : "Name", "Value" : {"Fn::Join" : ["", [{ "Ref" : "AWS::StackName" }, "_Worker"] ]} }
           ],
@@ -421,7 +434,7 @@
       "DependsOn" : ["MasterSecurityGroup", "WorkerSecurityGroup"],
       "Properties" : {
         "GroupDescription": "Security group for mount target",
-        "VpcId" : { "Ref" : "Vpc" },
+        "VpcId" : { "Fn::If" : [ "CreateNewVpc", {"Ref" : "Vpc"}, {"Ref" : "VpcId"} ] },
           "Tags" : [
             { "Key" : "Name", "Value" : {"Fn::Join" : ["", [{ "Ref" : "AWS::StackName" }, "_Master" ] ] } }
           ],
@@ -451,7 +464,7 @@
       "Type": "AWS::EFS::MountTarget",
       "Properties": {
         "FileSystemId": { "Fn::If" : [ "CreateNewFileSystem", {"Ref" : "FileSystem"}, {"Ref" : "EFSFileSystemId"} ] },
-        "SubnetId" : { "Ref" : "PrivateSubnet" },
+        "SubnetId" : { "Fn::If" : [ "CreateNewVpc", {"Ref" : "PrivateSubnet"}, {"Ref" : "PrivateSubnetId"} ] },
         "SecurityGroups": [ { "Ref": "MountTargetSecurityGroup" } ]
       }
     },
@@ -660,7 +673,7 @@
         "MinSize" : "1",
         "MaxSize" : "1",
         "LaunchConfigurationName" : { "Ref" : "MasterLaunchConfig"},
-        "VPCZoneIdentifier" : [{ "Ref" : "PublicSubnet"}],
+        "VPCZoneIdentifier" : [{ "Fn::If" : [ "CreateNewVpc", {"Ref" : "PublicSubnet"}, {"Ref" : "PublicSubnetId"} ] }],
         "NotificationConfiguration" : {
           "TopicARN" : {
             "Ref" : "ResourceMetadataSNSTopic"
@@ -696,7 +709,7 @@
         "LaunchConfigurationName" : {
           "Ref" : "WorkerLaunchConfig"
         },
-        "VPCZoneIdentifier" : [ { "Ref" : "PrivateSubnet" } ],
+        "VPCZoneIdentifier" : [ { "Fn::If" : [ "CreateNewVpc", {"Ref" : "PrivateSubnet"}, {"Ref" : "PrivateSubnetId"} ] } ],
         "NotificationConfiguration" : {
           "TopicARN" : {
             "Ref" : "ResourceMetadataSNSTopic"
@@ -767,6 +780,7 @@
     },
     "Vpc" : {
       "Type" : "AWS::EC2::VPC",
+      "Condition": "CreateNewVpc",
       "Properties" : {
           "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "VPC", "CIDR" ]},
           "EnableDnsSupport" : "true",
@@ -778,6 +792,7 @@
     },
     "InternetGateway" : {
       "Type" : "AWS::EC2::InternetGateway",
+      "Condition": "CreateNewVpc",
       "Properties" : {
         "Tags" : [
           { "Key" : "Network", "Value" : "Public" },
@@ -787,6 +802,7 @@
     },
     "GatewayToInternet" : {
        "Type" : "AWS::EC2::VPCGatewayAttachment",
+      "Condition": "CreateNewVpc",
        "Properties" : {
          "VpcId" : { "Ref" : "Vpc" },
          "InternetGatewayId" : { "Ref" : "InternetGateway" }
@@ -794,6 +810,7 @@
     },
     "PublicSubnet" : {
       "Type" : "AWS::EC2::Subnet",
+      "Condition": "CreateNewVpc",
       "DependsOn" : ["PrivateSubnet"],
       "Properties" : {
         "VpcId" : {"Ref" : "Vpc"},
@@ -807,6 +824,7 @@
     },
     "PrivateSubnet" : {
       "Type" : "AWS::EC2::Subnet",
+      "Condition": "CreateNewVpc",
       "Properties" : {
           "VpcId" : { "Ref" : "Vpc" },
           "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Private", "CIDR" ]},
@@ -818,6 +836,7 @@
     },
     "NATGateway" : {
       "Type" : "AWS::EC2::NatGateway",
+      "Condition": "CreateNewVpc",
       "DependsOn" : "GatewayToInternet",
       "Properties" : {
         "AllocationId" : {
@@ -833,6 +852,7 @@
     },
     "PublicRouteTable" : {
       "Type" : "AWS::EC2::RouteTable",
+      "Condition": "CreateNewVpc",
       "DependsOn": "GatewayToInternet",
       "Properties" : {
         "VpcId" : { "Ref" : "Vpc" },
@@ -844,6 +864,7 @@
     },
     "PublicRoute" : {
       "Type" : "AWS::EC2::Route",
+      "Condition": "CreateNewVpc",
       "Properties" : {
         "RouteTableId" : { "Ref" : "PublicRouteTable" },
         "DestinationCidrBlock" : "0.0.0.0/0",
@@ -852,6 +873,7 @@
     },
     "PublicSubnetRouteAssociation" : {
       "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Condition": "CreateNewVpc",
       "Properties" : {
         "SubnetId" : { "Ref" : "PublicSubnet" },
         "RouteTableId" : { "Ref" : "PublicRouteTable" }
@@ -859,6 +881,7 @@
     },
     "PrivateRouteTable" : {
       "Type" : "AWS::EC2::RouteTable",
+      "Condition": "CreateNewVpc",
       "Properties" : {
         "VpcId" : { "Ref" : "Vpc" },
         "Tags" : [
@@ -869,6 +892,7 @@
     },
     "PrivateRoute" : {
       "Type" : "AWS::EC2::Route",
+      "Condition": "CreateNewVpc",
       "Properties" : {
         "RouteTableId" : { "Ref" : "PrivateRouteTable" },
         "DestinationCidrBlock" : "0.0.0.0/0",
@@ -877,6 +901,7 @@
     },
     "PrivateSubnetRouteAssociation" : {
       "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Condition": "CreateNewVpc",
       "Properties" : {
         "SubnetId" : { "Ref" : "PrivateSubnet" },
         "RouteTableId" : { "Ref" : "PrivateRouteTable" }
